@@ -1,0 +1,40 @@
+insert into dim.`dim_combine_item_mapp_d`
+  select t1.enty_item_code, t1.combine_item_code_level1, t1.item_code_level1, t1.item_qty_level1, t1.combine_item_code,
+         t1.item_code, t1.item_qty, t1.data_date, now() as dw_create_time, now() as dw_update_time, t1.source,
+         t1.delete_flag
+  from (
+    select enty_item_code, combine_item_code_level1, item_code_level1, item_qty_level1, combine_item_code, item_code,
+           item_qty, data_date, source, delete_flag
+    from (
+      select t1.enty_item_code, t1.combine_item_code_level1, t1.item_code as item_code_level1,
+             cast(t1.item_qty as bigint) as item_qty_level1,
+             COALESCE(lower(t2.sku_id), t1.item_code) as combine_item_code,
+             COALESCE(lower(t3.src_sku_id), t1.item_code) as item_code,
+             cast(t1.item_qty * COALESCE(t3.qty, 1) as bigint) as item_qty, data_date, t1.source, t1.delete_flag
+      from (
+        select                  to_date(t1.dw_create_time) as data_date, lower(case
+        when
+        t1.enty_sku_id is null or t1.enty_sku_id = '' then t1.sku_id
+        else t1.enty_sku_id
+        end) as enty_item_code, lower(t1.sku_id) as combine_item_code_level1, lower(t2.src_sku_id) as item_code,
+                                t2.qty as item_qty, t1.source, t1.delete_flag
+        from ods.ods_jst_combine_sku_info t1
+        left join ods.ods_jst_combine_sku_items t2
+        on lower(t1.sku_id) = lower(t2.sku_id) and to_date(t1.dw_create_time) = to_date(t2.dw_create_time)
+        union
+        select to_date(t1.dw_create_time) as data_date, lower(t1.sku_id) as enty_item_code,
+               lower(t1.sku_id) as combine_item_code_level1, lower(t2.src_sku_id) as item_code, t2.qty as item_qty,
+               t1.source, t1.delete_flag
+        from ods.ods_jst_combine_sku_info t1
+        left join ods.ods_jst_combine_sku_items t2
+        on lower(t1.sku_id) = lower(t2.sku_id) and to_date(t1.dw_create_time) = to_date(t2.dw_create_time)
+        where t1.enty_sku_id is not null and t1.enty_sku_id <> ''
+      ) t1
+      left join ods.ods_jst_combine_sku_info t2
+      on t1.item_code = lower(t2.enty_sku_id) and data_date = to_date(t2.dw_create_time)
+      left join ods.ods_jst_combine_sku_items t3
+      on lower(t2.sku_id) = lower(t3.sku_id) and to_date(t2.dw_create_time) = to_date(t3.dw_create_time)
+    ) a
+  ) t1
+
+

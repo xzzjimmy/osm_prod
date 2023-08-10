@@ -1,0 +1,6 @@
+--name:test
+--author:zhengzhixu
+--create time:2023-08-03 15:29
+
+select * from ads_dfl_video_portrait_df where ds='20230701'
+limit 100
