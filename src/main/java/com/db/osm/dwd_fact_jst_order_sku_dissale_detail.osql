@@ -1,0 +1,120 @@
+
+insert into dwd_fact_jst_order_sku_dissale_detail
+--订单拆分
+  select
+  tmp1.erp_no
+  ,tmp1.sub_erp_no
+  ,tmp1.order_code
+  ,tmp1.shop_id
+  ,tmp1.shop_name
+  ,tmp1.shop_brand_name
+  ,tmp1.send_time
+  ,tmp1.send_date
+  ,tmp1.apply_refund_date as apply_refund_time
+  ,to_date(tmp1.apply_refund_date) as apply_refund_date
+  ,if(tmp1.apply_refund_date is not null,'Y','N') as is_refund_flag
+  ,tmp1.warehouse_code
+  ,tmp1.warehouse_name
+  ,tmp1.ori_paid_amount
+  ,tmp1.ori_item_code
+  ,tmp1.ori_item_qty
+  ,tmp1.order_status
+  ,tmp1.item_status
+  ,tmp1.ori_item_amount
+  ,tmp1.ori_item_amount_dis
+  -- ,tmp1.item_freight_amount
+  -- ,tmp1.item_free_amount
+  ,tmp1.item_code
+  ,tmp1.item_name
+  ,tmp1.item_category_name
+  ,tmp1.item_brand_name
+  ,tmp1.item_cost_price
+  ,tmp1.order_qty
+  ,tmp1.order_amt
+  -- 销售金额分摊
+  --1.如果订单主表应付为0且实付>0,则订单子表amount为0，此种情况下，直接按照数量分摊
+  ,case when tmp1.is_empty_order='Y' then tmp1.order_qty/sum(tmp1.order_qty) over(partition by erp_no)*ori_paid_amount
+        when tmp1.ori_item_code=tmp1.item_code or tmp1.item_code in('易妆邮费','权益测试') then ori_item_amount_dis
+        else tmp1.order_amt/sum(tmp1.order_amt) over(partition by sub_erp_no)*ori_item_amount_dis
+        end as order_amt_dis
+  from(
+  --物品金额的分摊
+    select
+    t1.erp_no
+    ,t1.sub_erp_no
+    ,t1.order_code
+    ,t1.apply_refund_date
+    ,t1.shop_id
+    ,t1.shop_name
+    ,t1.shop_brand_name
+    ,t1.send_time
+    ,t1.send_date
+    ,t1.warehouse_code
+    ,t1.warehouse_name
+    ,t1.ori_item_code
+    ,t1.ori_item_qty
+    ,t1.order_status
+    ,t1.item_status
+    ,t1.ori_paid_amount
+    ,t1.ori_item_amount
+    ,t1.ori_item_amount_dis
+    ,t1.is_empty_order
+    ,COALESCE(t9.item_code,t3.item_code,t1.ori_item_code) as item_code
+    ,t4.item_name
+    ,t4.category_name as item_category_name
+    ,t4.brand as item_brand_name
+    ,case when t9.item_code is not null then t1.ori_item_qty  else t1.ori_item_qty *COALESCE(t3.item_qty,1) end order_qty
+    ,t4.cost_price as item_cost_price
+    ,case when t9.item_code is not null then t1.ori_item_qty*coalesce(t4.cost_price,0)  else t1.ori_item_qty *COALESCE(t3.item_qty,1)*coalesce(t4.cost_price,0) end order_amt
+    from(
+
+      select tmp1.o_id as erp_no
+      ,tmp1.so_id as order_code
+      ,tmp2.oi_id as sub_erp_no
+      ,tmp3.apply_refund_date
+      ,tmp1.shop_id
+      ,tmp4.shop_name
+      ,tmp4.brand_name as shop_brand_name
+      ,tmp1.send_date as send_time
+      ,to_date(tmp1.send_date) as send_date
+      ,tmp1.wms_co_id as warehouse_code
+      ,tmp5.warehouse_name
+      ,tmp1.status as order_status
+      ,lower(tmp2.sku_id) as ori_item_code
+      ,tmp2.qty as ori_item_qty
+      ,tmp2.item_status
+      ,tmp2.amount as ori_item_amount
+      ,tmp1.paid_amount as ori_paid_amount
+      --标记特殊订单 订单明细中 amount全部为0或为空的订单
+      ,if(sum(coalesce(tmp2.amount,0)) over(partition by tmp1.o_id)=0,'Y','N') AS is_empty_order
+      --商品金额分摊
+      ,tmp2.amount/sum(tmp2.amount) over(partition by tmp1.o_id)*tmp1.paid_amount as ori_item_amount_dis
+      --邮费分摊
+      -- ,tmp2.amount/sum(tmp2.amount) over(partition by tmp1.o_id)*tmp1.freight as item_freight_amount
+      --折扣分摊
+      -- ,tmp2.amount/sum(tmp2.amount) over(partition by tmp1.o_id)*tmp1.free_amount as item_free_amount
+      from ods.ods_jst_qm_orders_info tmp1
+      left join(
+        select o_id
+        ,min(as_date) as apply_refund_date
+        from ods.ods_jst_qm_order_refund_list
+        where lower(status)<>'cancelled'
+        group by o_id
+      )tmp3 on tmp1.o_id=tmp3.o_id
+      left join dim.dim_online_shop tmp4 on tmp1.shop_id=tmp4.shop_id
+      left join dim.dim_masterdata_warehouse tmp5 on tmp1.wms_co_id=tmp5.warehouse_code and tmp5.company_code='09'
+      left join ods.ods_jst_qm_orders_info_sku tmp2
+      on tmp1.o_id=tmp2.o_id
+      --计算2023年之后的数据，且只统计欧诗漫品牌
+      where to_date(tmp1.send_date)>='2023-01-01'
+      and lower(tmp1.status)='sent'
+      and coalesce(lower(tmp2.item_status),'unknown')<>'replaced'
+      -- and tmp2.amount>0
+
+    )t1 left join ods.ods_manual_hist_item_mapp t9 on t1.ori_item_code=lower(t9.hist_item_code)
+    left join dim.dim_combine_item_mapp_d t3 on t1.ori_item_code=t3.enty_item_code and if(t1.send_date<'2022-01-01','2022-01-01',t1.send_date) =t3.data_date
+    --获取电商成本价
+    left join dim.dim_online_item_d t4 on COALESCE(t9.item_code,t3.item_code,t1.ori_item_code)=t4.item_code
+    and if(t1.send_date<='2023-06-26','2023-06-26',t1.send_date)=t4.data_date
+
+  )tmp1
